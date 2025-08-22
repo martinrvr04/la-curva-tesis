@@ -2,45 +2,44 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Habitacion extends Model
 {
-    use HasFactory;
-
-    // Nombre real de la tabla (evita 'habitacions')
     protected $table = 'habitaciones';
 
     protected $fillable = [
-        'numero',
-        'tipo',
-        'capacidad',
-        'precio_noche',
-        'descripcion',
-        'imagen',
+        'numero', 'tipo', 'capacidad', 'precio_noche', 'descripcion', 'imagen',
+        // agrega tus campos reales…
     ];
 
-    /**
-     * Relación: una habitación tiene muchas reservas
-     * FK correcta en la tabla 'reservas': habitacion_id
-     */
+    /* Relaciones */
     public function reservas()
     {
         return $this->hasMany(Reserva::class, 'habitacion_id');
     }
 
     /**
-     * Scope: habitaciones disponibles entre dos fechas
-     * No disponible si hay reserva no cancelada que se solape:
-     *  fecha_entrada < checkOut  &&  fecha_salida > checkIn
+     * Scope: habitaciones disponibles entre $desde y $hasta
+     * Regla: NO debe existir una reserva que:
+     *  - se solape con el rango, y
+     *  - (estado = confirmada) o (estado = pre_reserva y NO vencida)
      */
-    public function scopeDisponibles($query, $checkIn, $checkOut)
+    public function scopeDisponibles($q, string $desde, string $hasta)
     {
-        return $query->whereDoesntHave('reservas', function ($q) use ($checkIn, $checkOut) {
-            $q->where('estado', '!=', 'cancelada')
-              ->where('fecha_entrada', '<', $checkOut)
-              ->where('fecha_salida',  '>', $checkIn);
+        return $q->whereDoesntHave('reservas', function ($r) use ($desde, $hasta) {
+            $r->where(function ($w) use ($desde, $hasta) {
+                // solape: A < B2 && B > A2
+                $w->where('fecha_entrada', '<', $hasta)
+                  ->where('fecha_salida',  '>', $desde);
+            })
+            ->where(function ($w2) {
+                $w2->where('estado', 'confirmada')
+                   ->orWhere(function ($w3) {
+                       $w3->where('estado', 'pre_reserva')
+                          ->where('expires_at', '>', now()); // ⏳ solo las NO vencidas bloquean
+                   });
+            });
         });
     }
 }

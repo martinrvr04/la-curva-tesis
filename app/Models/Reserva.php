@@ -13,8 +13,9 @@ class Reserva extends Model
 
     protected $table = 'reservas';
 
-    // Estados válidos según tu CHECK
-    public const ESTADOS = ['pendiente','confirmada','cancelada','completada'];
+    // Estados válidos
+    public const ESTADOS = ['pre_reserva','confirmada','cancelada'];
+    public const PAGOS   = ['unpaid','paid','failed'];
 
     protected $fillable = [
         'codigo_reserva',
@@ -28,18 +29,21 @@ class Reserva extends Model
         'total_reserva',
         'nota_cliente',
         'origen',
+        'payment_status',
+        'expires_at',
+        'payment_intent_id',
     ];
 
     protected $casts = [
-        'fecha_entrada' => 'date',
-        'fecha_salida'  => 'date',
-        'total_reserva' => 'decimal:2',
+        'fecha_entrada'     => 'date',
+        'fecha_salida'      => 'date',
+        'total_reserva'     => 'decimal:2',
+        'expires_at'        => 'datetime',
     ];
 
     /* ==========================
      | Relaciones
      ==========================*/
-
     public function habitacion()
     {
         return $this->belongsTo(Habitacion::class, 'habitacion_id');
@@ -47,10 +51,9 @@ class Reserva extends Model
 
     public function usuario()
     {
-        // tu FK es usuario_id → users.id
         return $this->belongsTo(User::class, 'usuario_id');
     }
-     /** NUEVO: relación con pagos */
+
     public function pagos()
     {
         return $this->hasMany(Pago::class, 'reserva_id');
@@ -60,13 +63,19 @@ class Reserva extends Model
      | Scopes útiles
      ==========================*/
 
-    // Activas = las que bloquean disponibilidad
+    // Activas = bloquean disponibilidad
     public function scopeActivas($q)
     {
-        return $q->whereIn('estado', ['pendiente','confirmada','completada']);
+        return $q->where(function($q) {
+            $q->where('estado', 'confirmada')
+              ->orWhere(function($q2) {
+                  $q2->where('estado', 'pre_reserva')
+                     ->where('expires_at', '>', now()); // ⏳ solo las no vencidas
+              });
+        });
     }
 
-    // Que se solapen con un rango (A<C2 && B>C1)
+    // Que se solapen con un rango
     public function scopeSolapan($q, $checkIn, $checkOut)
     {
         return $q->where('fecha_entrada', '<', $checkOut)
@@ -82,32 +91,30 @@ class Reserva extends Model
         return Carbon::parse($this->fecha_entrada)->diffInDays(Carbon::parse($this->fecha_salida));
     }
 
+    public function getExpiradaAttribute(): bool
+    {
+        return $this->estado === 'pre_reserva'
+            && $this->expires_at
+            && $this->expires_at->isPast();
+    }
+
     /* ==========================
      | Lógica de negocio
      ==========================*/
-
-    // ¿Esta reserva se solapa con otro rango?
     public function solapaCon(string $desde, string $hasta): bool
     {
         return ($this->fecha_entrada < $hasta) && ($this->fecha_salida > $desde);
     }
 
-    /**
-     * Calcula el total considerando precios por día.
-     * - Usa precios_habitaciones si hay rangos para cada fecha,
-     * - si no, usa habitaciones.precio_noche.
-     */
     public function calcularTotal(): float
     {
         $hab = $this->habitacion()->firstOrFail();
         $noches = $this->noches;
         if ($noches <= 0) return 0.0;
 
-        // Trae rangos que cubran o toquen el periodo
         $rangos = DB::table('precios_habitaciones')
             ->where('habitacion_id', $hab->id)
             ->where(function ($q) {
-                // Se completa con el rango de esta reserva
                 $q->whereBetween('fecha_inicio', [$this->fecha_entrada, $this->fecha_salida])
                   ->orWhereBetween('fecha_fin',   [$this->fecha_entrada, $this->fecha_salida])
                   ->orWhere(function ($q2) {
@@ -126,7 +133,6 @@ class Reserva extends Model
             $precioDia = (float)$hab->precio_noche;
 
             foreach ($rangos as $r) {
-                // Nota: asumimos fecha_fin es exclusiva (como en el controlador)
                 if ($dia >= $r->fecha_inicio && $dia < $r->fecha_fin) {
                     $precioDia = (float)$r->precio_noche;
                     break;
@@ -143,13 +149,22 @@ class Reserva extends Model
     /* ==========================
      | Hooks
      ==========================*/
-
-    // Genera un código si no viene
     protected static function booted()
     {
         static::creating(function (self $reserva) {
             if (empty($reserva->codigo_reserva)) {
                 $reserva->codigo_reserva = strtoupper('LC-' . substr(uniqid('', true), -6));
+            }
+
+            // Defaults de seguridad
+            if (empty($reserva->estado)) {
+                $reserva->estado = 'pre_reserva';
+            }
+            if (empty($reserva->payment_status)) {
+                $reserva->payment_status = 'unpaid';
+            }
+            if (empty($reserva->expires_at)) {
+                $reserva->expires_at = now()->addMinutes(15);
             }
         });
     }
