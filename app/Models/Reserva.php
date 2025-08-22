@@ -50,6 +50,11 @@ class Reserva extends Model
         // tu FK es usuario_id → users.id
         return $this->belongsTo(User::class, 'usuario_id');
     }
+     /** NUEVO: relación con pagos */
+    public function pagos()
+    {
+        return $this->hasMany(Pago::class, 'reserva_id');
+    }
 
     /* ==========================
      | Scopes útiles

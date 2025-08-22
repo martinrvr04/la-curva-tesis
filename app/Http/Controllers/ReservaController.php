@@ -63,15 +63,26 @@ class ReservaController extends Controller
                 'noches'     => $noches,
             ]);
         } catch (\Illuminate\Validation\ValidationException $ve) {
-            // Responder 422 con errores de validación (para que el front los pueda mostrar)
-            return response()->json([
-                'message' => 'Parámetros inválidos.',
-                'errors'  => $ve->errors(),
-            ], 422);
-        } catch (\Throwable $e) {
-            Log::error('Error en reservas.buscar: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
-            return response()->json(['message' => 'Error interno.'], 500);
-        }
+    return response()->json([
+        'message' => 'Parámetros inválidos.',
+        'errors'  => $ve->errors(),
+    ], 422);
+} catch (\Throwable $e) {
+    \Log::error('Error en reservas.buscar: '.$e->getMessage(), [
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+    ]);
+
+    if (app()->environment('local')) {
+        return response()->json([
+            'message' => $e->getMessage(),
+            'file'    => basename($e->getFile()),
+            'line'    => $e->getLine(),
+        ], 500);
+    }
+
+    return response()->json(['message' => 'Error interno.'], 500);
+}
     }
 
     /**
